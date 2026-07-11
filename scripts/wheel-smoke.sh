@@ -18,7 +18,14 @@ export XDG_CONFIG_HOME="$tmp/config"
 git init "$tmp/example-repo" >/dev/null
 "$tmp/venv/bin/orchestrator" create-repo example-repo --path "$tmp/example-repo" >/dev/null
 "$tmp/venv/bin/orchestrator" status --json >/dev/null
-test "$(stat -f '%Lp' "$tmp/state/claude-discord-agent" 2>/dev/null || stat -c '%a' "$tmp/state/claude-discord-agent")" = 700
-test "$(stat -f '%Lp' "$tmp/config/claude-discord-agent" 2>/dev/null || stat -c '%a' "$tmp/config/claude-discord-agent")" = 700
-test "$(stat -f '%Lp' "$tmp/config/claude-discord-agent/repos.json" 2>/dev/null || stat -c '%a' "$tmp/config/claude-discord-agent/repos.json")" = 600
+file_mode() {
+  if [[ $(uname -s) == Darwin ]]; then
+    stat -f '%Lp' "$1"
+  else
+    stat -c '%a' "$1"
+  fi
+}
+test "$(file_mode "$tmp/state/claude-discord-agent")" = 700
+test "$(file_mode "$tmp/config/claude-discord-agent")" = 700
+test "$(file_mode "$tmp/config/claude-discord-agent/repos.json")" = 600
 echo "wheel smoke: PASS"
