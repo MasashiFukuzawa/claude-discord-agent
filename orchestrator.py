@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from lib.daemon import Daemon, is_daemon_running
 from lib.db import Database
+from lib.paths import ensure_private_dir, secure_file
 from lib.registry import Registry, RegistryError, preflight_check
 from lib.result_parser import parse_result
 from lib.runner import Runner
@@ -73,6 +74,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             db,
             global_max_concurrency=args.global_concurrency,
             auto_wake=args.auto_wake is True,
+            fallback_result_preview=args.fallback_result_preview is True,
         )
         return daemon.start(foreground=args.foreground)
     elif action == "stop":
@@ -463,12 +465,10 @@ def cmd_run_spec(args: argparse.Namespace) -> int:
 
 def cmd_list_specs(args: argparse.Namespace) -> int:
     """利用可能な spec 一覧を表示。"""
-    from lib.spec import SPECS_DIR
-
-    spec_dir = Path(args.spec_dir) if args.spec_dir else SPECS_DIR
-    specs = list_specs(search_dirs=[spec_dir])
+    spec_dir = Path(args.spec_dir) if args.spec_dir else None
+    specs = list_specs(search_dirs=[spec_dir] if spec_dir else None)
     if not specs:
-        print(f"(no specs found in {spec_dir})")
+        print(f"(no specs found{f' in {spec_dir}' if spec_dir else ''})")
         return 0
     for s in specs:
         print(f"  {s['id']}")
@@ -828,19 +828,19 @@ def cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
-
 def cmd_register_pane(args: argparse.Namespace) -> int:
     """現在の TMUX_PANE を controller.pane ファイルに保存する。"""
     pane = os.environ.get("TMUX_PANE")
     if not pane:
         print("ERROR: TMUX_PANE が設定されていません。tmux 内で実行してください。", file=sys.stderr)
         return 1
-    if not re.match(r'^%\d+$', pane):
+    if not re.match(r"^%\d+$", pane):
         print(f"ERROR: TMUX_PANE の形式が不正です: {pane!r}", file=sys.stderr)
         return 1
     pane_file = _daemon_state_dir() / "controller.pane"
-    pane_file.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(pane_file.parent, tighten_existing=_custom_db_path is None)
     pane_file.write_text(pane)
+    secure_file(pane_file)
     print(f"OK: registered pane {pane}")
     return 0
 
@@ -856,7 +856,7 @@ def cmd_clear_session(args: argparse.Namespace) -> int:
         )
         return 1
     pane = pane_file.read_text().strip()
-    if not re.match(r'^%\d+$', pane):
+    if not re.match(r"^%\d+$", pane):
         print(f"ERROR: controller.pane の値が不正です: {pane!r}", file=sys.stderr)
         return 1
 
@@ -866,12 +866,16 @@ def cmd_clear_session(args: argparse.Namespace) -> int:
         text=True,
     )
     if pane not in result.stdout.split():
-        print(f"ERROR: pane {pane} は存在しません。register-pane を再実行してください。", file=sys.stderr)
+        print(
+            f"ERROR: pane {pane} は存在しません。register-pane を再実行してください。",
+            file=sys.stderr,
+        )
         return 1
 
     subprocess.run(["tmux", "send-keys", "-t", pane, "/clear", "Enter"], check=True)
     print(f"OK: /clear sent to pane {pane}")
     return 0
+
 
 def cmd_report_done(args: argparse.Namespace) -> int:
     """Controller が Discord への reply 完了後に呼ぶ。Supervisor の fallback 配送を抑止する。
@@ -932,7 +936,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--auto-wake",
         action="store_true",
-        help="Opt in to fail-closed tmux wake injection (disabled by default)",
+        help="EXPERIMENTAL: opt in to fail-closed tmux wake injection (disabled by default)",
+    )
+    p.add_argument(
+        "--fallback-result-preview",
+        action="store_true",
+        help="Opt in to a redacted 200-character result preview in fallback notifications",
     )
 
     # create-repo

@@ -24,20 +24,26 @@ description: >-
 ## Runtime preflight
 
 ```bash
-test -n "${DISCORD_AGENT_HOME:-}" || { echo 'DISCORD_AGENT_HOME is required' >&2; exit 1; }
-test -f "$DISCORD_AGENT_HOME/orchestrator.py" || { echo 'runtime not found' >&2; exit 1; }
+if command -v orchestrator >/dev/null 2>&1; then
+  DISCORD_AGENT_COMMAND=(orchestrator)
+elif [[ -n "${DISCORD_AGENT_HOME:-}" && -f "$DISCORD_AGENT_HOME/orchestrator.py" ]]; then
+  DISCORD_AGENT_COMMAND=(python3 "$DISCORD_AGENT_HOME/orchestrator.py")
+else
+  echo 'runtime not found: install with uv tool or set DISCORD_AGENT_HOME' >&2
+  exit 1
+fi
 command -v claude >/dev/null || { echo 'claude CLI is required' >&2; exit 1; }
-command -v tmux >/dev/null || { echo 'tmux is required' >&2; exit 1; }
-python3 "$DISCORD_AGENT_HOME/orchestrator.py" health
+"${DISCORD_AGENT_COMMAND[@]}" health
 ```
 
 自動wakeを明示的に有効化する場合だけ、Controller paneをtmux内で登録します。既定ではdaemonが
 Discordへ直接fallback通知し、tmuxへ文字列やEnterを送信しません。
 
 ```bash
-python3 "$DISCORD_AGENT_HOME/orchestrator.py" register-pane
+command -v tmux >/dev/null || { echo 'tmux is required for --auto-wake' >&2; exit 1; }
+"${DISCORD_AGENT_COMMAND[@]}" register-pane
 # Explicit opt-in; restart an existing daemon before changing this mode:
-python3 "$DISCORD_AGENT_HOME/orchestrator.py" daemon start --auto-wake
+"${DISCORD_AGENT_COMMAND[@]}" daemon start --auto-wake
 ```
 
 ## Request flow
@@ -51,13 +57,13 @@ python3 "$DISCORD_AGENT_HOME/orchestrator.py" daemon start --auto-wake
 7. 返信成功後、同じ job ID に `report-done` を実行する。
 
 ```bash
-python3 "$DISCORD_AGENT_HOME/orchestrator.py" dispatch example-app \
+"${DISCORD_AGENT_COMMAND[@]}" dispatch example-app \
   'Fix the failing validation test' \
   --notify-chat-id "$DISCORD_NOTIFY_CHAT_ID"
 
-python3 "$DISCORD_AGENT_HOME/orchestrator.py" collect example-app --job-id 42 --json
+"${DISCORD_AGENT_COMMAND[@]}" collect example-app --job-id 42 --json
 # Discord reply succeeded:
-python3 "$DISCORD_AGENT_HOME/orchestrator.py" report-done 42
+"${DISCORD_AGENT_COMMAND[@]}" report-done 42
 ```
 
 ## Command boundaries

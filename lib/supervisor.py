@@ -34,9 +34,19 @@ _DEFAULT_PANE_FILE = state_dir() / "controller.pane"
 
 # Full-line prompts that positively identify a normal, idle input state.
 # A UI change intentionally disables wake until this allowlist is reviewed.
-IDLE_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"^claude>\s*$"),
+IDLE_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (re.compile(r"^claude>\s*$"),)
+
+_PREVIEW_REDACTIONS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)(?:authorization|token|secret|password)\s*[:=]\s*[^\s,;]+"),
+    re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
+    re.compile(r"/(?:Users|home)/[^/\s]+/[^\s]+"),
 )
+
+
+def _redact_result_preview(text: str) -> str:
+    for pattern in _PREVIEW_REDACTIONS:
+        text = pattern.sub("[REDACTED]", text)
+    return text[:200] + ("..." if len(text) > 200 else "")
 
 
 class Supervisor:
@@ -53,12 +63,14 @@ class Supervisor:
         max_wake_attempts: int = 1,
         pane_file: Path | None = None,
         auto_wake: bool = False,
+        fallback_result_preview: bool = False,
     ) -> None:
         self._db = db
         self.wake_grace_seconds = wake_grace_seconds
         self.max_wake_attempts = max_wake_attempts
         self._pane_file = pane_file or _DEFAULT_PANE_FILE
         self.auto_wake = auto_wake
+        self.fallback_result_preview = fallback_result_preview
 
     def tick(self) -> None:
         """未配送の terminal ジョブを走査し、配送を試みる。"""
@@ -201,15 +213,13 @@ class Supervisor:
 
         if not chat_id:
             # chat_id 未設定 → fallback も送れない
-            logger.warning(
-                "Fallback push impossible for job %d: no notify_chat_id set", job_id
-            )
+            logger.warning("Fallback push impossible for job %d: no notify_chat_id set", job_id)
             self._db.set_undeliverable(job_id)
             return
 
         state = job["state"]
         result_text = job.get("result") or ""
-        result_short = result_text[:200] + ("..." if len(result_text) > 200 else "")
+        result_short = _redact_result_preview(result_text) if self.fallback_result_preview else ""
 
         msg_parts = [
             f"⚠️ (自動配送) **Job {job_id}** → `{state}`",
@@ -224,14 +234,14 @@ class Supervisor:
             self._db.mark_reported(job_id, time.time())
             logger.info("Fallback push succeeded for job %d", job_id)
         elif result.permanent:
-            logger.error(
-                "Fallback push permanently failed for job %d: %s", job_id, result.reason
-            )
+            logger.error("Fallback push permanently failed for job %d: %s", job_id, result.reason)
             self._db.set_undeliverable(job_id)
         else:
             # 一時失敗 → 次 tick でリトライ（wake_state='fallback' のまま）
             logger.warning(
-                "Fallback push temporarily failed for job %d: %s (will retry)", job_id, result.reason
+                "Fallback push temporarily failed for job %d: %s (will retry)",
+                job_id,
+                result.reason,
             )
 
     # ─── 内部: tmux ユーティリティ ───────────────────────────

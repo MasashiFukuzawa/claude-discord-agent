@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import DEFAULT_DB_DIR, Database
+from .paths import ensure_private_dir, secure_file
 from .runner import Runner
 from .scheduler import BackoffTracker, Scheduler
 from .supervisor import Supervisor
@@ -67,6 +68,7 @@ class Daemon:
         poll_interval: float = 5.0,
         watchdog_interval: float = 30.0,
         auto_wake: bool = False,
+        fallback_result_preview: bool = False,
     ):
         self.db = db
         self.poll_interval = poll_interval
@@ -84,13 +86,19 @@ class Daemon:
         self.runner = Runner(db, scheduler=self.scheduler)
         self.watchdog = Watchdog(db, self.runner)
         # Supervisor: direct fallback by default; tmux wake is explicit opt-in.
-        self.supervisor = Supervisor(db, auto_wake=auto_wake)
+        self.supervisor = Supervisor(
+            db,
+            auto_wake=auto_wake,
+            fallback_result_preview=fallback_result_preview,
+        )
 
         self._last_watchdog_check = 0.0
 
     def _write_pid(self) -> None:
-        self._state_dir.mkdir(parents=True, exist_ok=True)
-        _pid_file_for(self._state_dir).write_text(str(os.getpid()))
+        ensure_private_dir(self._state_dir, tighten_existing=self.db._secure_parent)
+        pid_file = _pid_file_for(self._state_dir)
+        pid_file.write_text(str(os.getpid()))
+        secure_file(pid_file)
 
     def _remove_pid(self) -> None:
         _pid_file_for(self._state_dir).unlink(missing_ok=True)

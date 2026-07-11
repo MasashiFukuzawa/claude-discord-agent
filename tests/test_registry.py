@@ -1,11 +1,14 @@
 """Registry tests: worktree path resolution, DB path management."""
 
+import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -177,6 +180,57 @@ class TestRegistryValidate(unittest.TestCase):
                 )
                 with self.assertRaises(RegistryError):
                     self.registry.validate("orchestrator-meta")
+
+
+class TestRegistryPortableStorage(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp_dir.name) / "state.db")
+        self.registry = Registry(self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp_dir.cleanup()
+
+    def test_export_uses_xdg_owner_only_path(self):
+        config_home = Path(self.tmp_dir.name) / "xdg-config"
+        self.db.create_repo("example", "/tmp/example")
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}):
+            exported = Path(self.registry.export_json())
+
+        self.assertEqual(
+            exported,
+            config_home / "claude-discord-agent" / "repos.json",
+        )
+        self.assertTrue(exported.exists())
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(exported.parent.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(exported.stat().st_mode), 0o600)
+
+    def test_import_falls_back_to_legacy_clone_file(self):
+        config_home = Path(self.tmp_dir.name) / "empty-xdg"
+        legacy = Path(self.tmp_dir.name) / "legacy-repos.json"
+        legacy.write_text(
+            json.dumps(
+                {
+                    "legacy": {
+                        "path": "/tmp/legacy",
+                        "aliases": [],
+                        "model": "sonnet",
+                        "max_concurrency": 1,
+                        "expected_git_root": "/tmp/legacy",
+                    }
+                }
+            )
+        )
+        with (
+            patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}),
+            patch("lib.registry.LEGACY_REPOS_JSON", legacy),
+        ):
+            count = self.registry.import_json()
+
+        self.assertEqual(count, 1)
+        self.assertIsNotNone(self.db.get_repo("legacy"))
 
 
 if __name__ == "__main__":

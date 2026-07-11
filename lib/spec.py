@@ -18,11 +18,22 @@ from __future__ import annotations
 
 import re
 import tomllib
+from importlib import resources
 from pathlib import Path
 from string import Template
 from typing import Any
 
 SPECS_DIR = Path(__file__).parent.parent / "specs"
+
+
+def _default_specs_dir() -> Path:
+    """Return packaged specs, falling back to the clone layout for compatibility."""
+    packaged = resources.files("lib.resources").joinpath("specs")
+    try:
+        return Path(str(packaged))
+    except TypeError:
+        return SPECS_DIR
+
 
 _FRONTMATTER_RE = re.compile(r"^---toml\s*\n(.*?)\n---\s*\n?(.*)", re.DOTALL)
 
@@ -144,7 +155,7 @@ def load_spec(spec_id: str, search_dirs: list[Path] | None = None) -> Spec:
     if Path(spec_id).is_absolute():
         return _parse_spec_file(Path(spec_id))
 
-    dirs = search_dirs if search_dirs is not None else [SPECS_DIR]
+    dirs = search_dirs if search_dirs is not None else [_default_specs_dir()]
     candidates: list[Path] = []
     for d in dirs:
         candidates.append(d / f"{spec_id}.md")
@@ -160,7 +171,7 @@ def load_spec(spec_id: str, search_dirs: list[Path] | None = None) -> Spec:
 
 def list_specs(search_dirs: list[Path] | None = None) -> list[dict[str, str]]:
     """利用可能な spec 一覧を返す。"""
-    dirs = search_dirs if search_dirs is not None else [SPECS_DIR]
+    dirs = search_dirs if search_dirs is not None else [_default_specs_dir()]
     results: list[dict[str, str]] = []
     for d in dirs:
         if not d.exists():

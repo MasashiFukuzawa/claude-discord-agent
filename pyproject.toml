@@ -1,7 +1,7 @@
 [project]
 name = "discord-agent"
-version = "0.1.0"
-description = "Discord経由のマルチリポジトリagentコントローラー。4プレーン分離アーキテクチャ。"
+version = "1.0.0"
+description = "Discord-driven asynchronous multi-repository controller for Claude Code."
 requires-python = ">=3.12"
 # 標準ライブラリのみ。外部依存なし。
 dependencies = []

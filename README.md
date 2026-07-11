@@ -1,62 +1,58 @@
 # claude-discord-agent
 
-Claude Code を Discord から操作する、複数リポジトリ対応のローカルジョブコントローラーです。
-Controller（Claude Code セッション）、Worker（`claude -p`）、Supervisor（Python daemon）を分離し、
-長時間タスクを非同期実行して完了結果を Discord に返します。
+A local, asynchronous multi-repository job controller that connects Discord to Claude Code.
+The Controller accepts work, Workers run `claude -p`, and a non-LLM Supervisor guarantees a
+terminal delivery attempt without giving Workers direct access to the Discord token.
 
 > [!IMPORTANT]
-> このプロジェクトは **Claude Code 専用**です。Worker 起動と Controller の wake-up は Claude Code CLI と
-> tmux の挙動に依存します。Codex や他のエージェントホストとの互換性は提供しません。
-
-## Architecture
-
-```text
-Discord <-> Controller (Claude Code in tmux)
-                  | dispatch / collect / report-done
-                  v
-             orchestrator.py
-                  | SQLite queue
-                  v
-            Supervisor daemon
-                  | claude -p
-                  v
-                Worker
-```
-
-- Controller は受付、ジョブ投入、結果の返信だけを担当します。
-- Worker は登録済みリポジトリ内で独立して作業し、構造化結果を stdout に返します。
-- Supervisor はジョブを監視し、Controller が応答しない場合に Discord へ fallback 通知します。
-- Bot token やリポジトリ一覧は Git 管理しません。
+> This project is Claude Code-only. It depends on Claude Code CLI behavior and optionally tmux.
+> It does not claim compatibility with Codex or other agent hosts.
 
 ## Requirements
 
-- Python 3.12+
-- Claude Code CLI（`claude`）
-- tmux
-- Discord bot token と送信先 channel ID
-- 開発時のみ: [uv](https://docs.astral.sh/uv/)
+- Python 3.12 or later on Linux or macOS
+- Claude Code CLI (`claude`)
+- A Discord bot token and destination channel ID
+- tmux only when using the experimental automatic wake feature
+
+Windows is not currently supported. The runtime uses POSIX ownership and permission checks,
+signals, and daemon behavior. WSL may work but is not part of the tested support matrix.
 
 ## Install
+
+The recommended installation is an isolated executable from GitHub:
+
+```bash
+uv tool install git+https://github.com/MasashiFukuzawa/claude-discord-agent.git
+orchestrator --help
+```
+
+Clone-based installs remain supported for operators who want a stable runtime checkout:
 
 ```bash
 git clone https://github.com/MasashiFukuzawa/claude-discord-agent.git "$HOME/.local/share/claude-discord-agent"
 cd "$HOME/.local/share/claude-discord-agent"
-uv sync --all-extras
+uv sync --all-extras --locked
+export DISCORD_AGENT_HOME="$HOME/.local/share/claude-discord-agent"
+python3 "$DISCORD_AGENT_HOME/orchestrator.py" --help
 ```
 
-Claude Code plugin として使う場合は、このリポジトリを marketplace に追加して
-`discord-agent` plugin をインストールしてください。runtime の場所は環境変数で明示します。
+`DISCORD_AGENT_HOME` is a compatibility path for clone-based operation. A `uv tool` install loads
+the worker prompt and bundled example specs from package resources and does not require that variable.
+
+## Configure
+
+Inject secrets from the environment or a secret manager:
 
 ```bash
-export DISCORD_AGENT_HOME="$HOME/.local/share/claude-discord-agent"
-export DISCORD_BOT_TOKEN="..."                 # shell/secret manager から注入
+export DISCORD_BOT_TOKEN="..."
 export DISCORD_NOTIFY_CHAT_ID="<channel-id>"
 ```
 
-token をファイルで管理する場合は
-`${XDG_CONFIG_HOME:-$HOME/.config}/claude-discord-agent/env` を `0600` で作成します。
-別の場所は `DISCORD_AGENT_ENV_FILE` で指定できます。runtime は現在ユーザー所有の通常ファイルかつ
-group/other 権限がないことを検証し、symlink・他ユーザー所有・`0644` 等のファイルを拒否します。
+Alternatively create `${XDG_CONFIG_HOME:-$HOME/.config}/claude-discord-agent/env` as an
+owner-controlled regular file with mode `0600`. The containing configuration and state directories
+must be `0700`; state files are tightened to `0600`. Symlinked, foreign-owned, or group/world-readable
+credential files are rejected.
 
 ```dotenv
 DISCORD_BOT_TOKEN=replace-with-your-token
@@ -64,43 +60,52 @@ DISCORD_BOT_TOKEN=replace-with-your-token
 
 ## Quick start
 
+Use `orchestrator` below. Clone-based users may substitute
+`python3 "$DISCORD_AGENT_HOME/orchestrator.py"`.
+
 ```bash
-cd "$DISCORD_AGENT_HOME"
-python3 orchestrator.py daemon start             # safe default: direct Discord fallback
-python3 orchestrator.py register-pane          # tmux 内で実行
-python3 orchestrator.py create-repo example-app --path "$HOME/src/example-app"
-python3 orchestrator.py dispatch example-app 'Run the tests and fix the failure' \
+orchestrator daemon start
+orchestrator create-repo example-app --path "$HOME/src/example-app"
+orchestrator dispatch example-app "Run the tests and fix the failure" \
   --notify-chat-id "$DISCORD_NOTIFY_CHAT_ID"
-python3 orchestrator.py status
-python3 orchestrator.py collect example-app --json
+orchestrator status
+orchestrator collect example-app --json
 ```
 
-状態 DB と controller pane は `${XDG_STATE_HOME:-$HOME/.local/state}/claude-discord-agent/` に保存されます。
-登録リポジトリは DB が正本です。`config/repos.json` は export/import 用で、`.gitignore` 対象です。
+Mutable state lives under `${XDG_STATE_HOME:-$HOME/.local/state}/claude-discord-agent/`.
+The SQLite registry is authoritative. Export/import data is written to
+`${XDG_CONFIG_HOME:-$HOME/.config}/claude-discord-agent/repos.json`. Existing clone-based
+`config/repos.json` files remain a read-only fallback for migration.
 
-## Safety model
+## Delivery safety
 
-- 登録対象は `git rev-parse --show-toplevel` で検証します。
-- token は環境変数または repo 外の設定ファイルからのみ読み込みます。
-- Worker は Discord API を呼びません。通知は Supervisor/Controller に集約します。
-- 本番操作、破壊的操作、権限拡張は Worker に渡す前にユーザー確認が必要です。
-- Worker は Claude Code の通常の権限境界内で起動します。runtime から
-  `--dangerously-skip-permissions` を付与する設定は提供しません。
-- Supervisor の tmux `send-keys` wake は既定で無効です。通常はdaemonがDiscordへ直接完了通知します。
-  `daemon start --auto-wake` は、positive allowlistで通常入力待ちを確認できた時だけwakeしますが、
-  UI判定に依存するため必要性を理解した運用者だけが明示的に有効化してください。未知画面では送信せず
-  fallback通知へ移行します。
+- Direct fallback notification is the default and does not include Worker result text.
+- `daemon start --fallback-result-preview` opts into a redacted, 200-character preview. Redaction is
+  defense in depth, not permission to place secrets in Worker output.
+- Automatic tmux wake is experimental, disabled by default, and fail-closed. `--auto-wake` sends keys
+  only when a positive prompt allowlist identifies an idle Controller; unknown UI states fall back safely.
+- Workers never receive the Discord token and are never launched with permission-bypass flags.
+- Destructive, production, or privilege-expanding work requires user confirmation before dispatch.
+
+## Claude Code plugin
+
+Add this repository as a Claude Code marketplace and install the `discord-agent` plugin. The skill
+uses the installed `orchestrator` executable when available and falls back to `DISCORD_AGENT_HOME`
+for clone-based deployments.
 
 ## Development
 
 ```bash
+uv sync --all-extras --locked
 uv run ruff check .
 uv run ty check lib orchestrator.py
 uv run pytest
+uv build
+./scripts/wheel-smoke.sh
 ./scripts/check-public-content.sh
 ```
 
-詳細な Controller 手順は [skills/discord-agent/SKILL.md](skills/discord-agent/SKILL.md) を参照してください。
+See [SECURITY.md](SECURITY.md) for the threat model and reporting instructions.
 
 ## License
 

@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from importlib import resources
 from pathlib import Path
 
 # Scheduler型は循環importを避けるためTYPE_CHECKING内でのみimport
@@ -29,6 +30,15 @@ _DEFAULT_SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "worker-s
 
 def _load_system_prompt(path: Path | None = None) -> str | None:
     """worker-system-prompt.md を読み込む。失敗時は None を返し warning ログ。"""
+    if path is None:
+        try:
+            return (
+                resources.files("lib.resources")
+                .joinpath("worker-system-prompt.md")
+                .read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, ModuleNotFoundError, OSError, TypeError) as error:
+            logger.warning("Could not load packaged system prompt: %s", error)
     target = path or _DEFAULT_SYSTEM_PROMPT_PATH
     try:
         return target.read_text(encoding="utf-8")

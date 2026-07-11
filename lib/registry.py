@@ -8,9 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .db import Database
+from .paths import config_dir, ensure_private_dir, secure_file
 
-CONFIG_DIR = Path(__file__).parent.parent / "config"
-REPOS_JSON = CONFIG_DIR / "repos.json"
+LEGACY_REPOS_JSON = Path(__file__).parent.parent / "config" / "repos.json"
+
+
+def repos_json_path() -> Path:
+    """Return the writable XDG registry export path."""
+    return config_dir() / "repos.json"
 
 
 class RegistryError(Exception):
@@ -126,7 +131,8 @@ class Registry:
     def export_json(self) -> str:
         """repos.jsonにエクスポート。"""
         repos = self.list_all()
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        path = repos_json_path()
+        ensure_private_dir(path.parent)
         data = {}
         for r in repos:
             data[r["name"]] = {
@@ -136,13 +142,18 @@ class Registry:
                 "max_concurrency": r["max_concurrency"],
                 "expected_git_root": r.get("expected_git_root"),
             }
-        with open(REPOS_JSON, "w") as f:
+        with open(path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        return str(REPOS_JSON)
+        secure_file(path)
+        return str(path)
 
     def import_json(self, json_path: str | None = None) -> int:
         """repos.jsonからインポート。"""
-        path = Path(json_path) if json_path else REPOS_JSON
+        if json_path:
+            path = Path(json_path)
+        else:
+            xdg_path = repos_json_path()
+            path = xdg_path if xdg_path.exists() else LEGACY_REPOS_JSON
         if not path.exists():
             raise RegistryError(f"File not found: {path}")
         with open(path) as f:

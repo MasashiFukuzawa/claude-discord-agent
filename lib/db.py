@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .paths import state_dir
+from .paths import ensure_private_dir, secure_file, state_dir
 
 DEFAULT_DB_DIR = state_dir()
 
@@ -179,14 +179,22 @@ class Database:
 
     def __init__(self, db_path: Path | str | None = None):
         if db_path is None:
-            DEFAULT_DB_DIR.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(DEFAULT_DB_DIR)
             db_path = DEFAULT_DB_DIR / "state.db"
+            secure_parent = True
+        else:
+            secure_parent = False
+        self._secure_parent = secure_parent
         self._path = Path(db_path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        if secure_parent:
+            ensure_private_dir(self._path.parent)
+        else:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._lock = threading.Lock()
         # メインスレッドで初期化（スキーマ作成）
         self._init_schema()
+        secure_file(self._path)
 
     def _make_conn(self) -> sqlite3.Connection:
         """新しいSQLite接続を作成する。"""
@@ -195,6 +203,7 @@ class Database:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
+        secure_file(self._path)
         return conn
 
     def _init_schema(self) -> None:
@@ -453,7 +462,9 @@ class Database:
             params.append(now)
         # requeue 時は配送状態をリセット（新しい attempt のクリーンスタート）
         elif new_state == "queued":
-            updates += ", terminal_at = NULL, wake_state = NULL, wake_attempts = 0, reported_at = NULL"
+            updates += (
+                ", terminal_at = NULL, wake_state = NULL, wake_attempts = 0, reported_at = NULL"
+            )
         params.append(job_id)
         self.conn.execute(f"UPDATE jobs SET {updates} WHERE id = ?", params)
         self.conn.commit()
@@ -636,16 +647,12 @@ class Database:
             "UPDATE jobs SET wake_attempts = wake_attempts + 1 WHERE id = ?", (job_id,)
         )
         self.conn.commit()
-        row = self.conn.execute(
-            "SELECT wake_attempts FROM jobs WHERE id = ?", (job_id,)
-        ).fetchone()
+        row = self.conn.execute("SELECT wake_attempts FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return row[0] if row else 0
 
     def set_undeliverable(self, job_id: int) -> None:
         """恒久失敗でこれ以上配送を試みない状態にする（無限リトライ防止）。"""
-        self.conn.execute(
-            "UPDATE jobs SET wake_state = 'undeliverable' WHERE id = ?", (job_id,)
-        )
+        self.conn.execute("UPDATE jobs SET wake_state = 'undeliverable' WHERE id = ?", (job_id,))
         self.conn.commit()
 
     def list_undelivered_terminal_jobs(self) -> list[dict[str, Any]]:
