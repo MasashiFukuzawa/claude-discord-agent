@@ -1,0 +1,17 @@
+version: 1
+verify:
+  quick:
+    - uv run ruff check .
+    - uv run pytest
+  standard:
+    - uv run ruff check .
+    - uv run ty check lib orchestrator.py
+    - uv run pytest
+    - uv run ./scripts/validate-plugin.py
+    - ./scripts/check-public-content.sh
+  full:
+    - uv run ruff check .
+    - uv run ty check lib orchestrator.py
+    - uv run pytest
+    - uv run ./scripts/validate-plugin.py
+    - ./scripts/check-public-content.sh

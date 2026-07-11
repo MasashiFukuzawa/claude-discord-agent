@@ -1,0 +1,75 @@
+[project]
+name = "discord-agent"
+version = "0.1.0"
+description = "Discord経由のマルチリポジトリagentコントローラー。4プレーン分離アーキテクチャ。"
+requires-python = ">=3.12"
+# 標準ライブラリのみ。外部依存なし。
+dependencies = []
+
+[project.scripts]
+orchestrator = "orchestrator:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lib", "orchestrator.py"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+    "pyyaml>=6.0.2",
+    "ruff>=0.15",
+    "ty>=0.0.29",
+]
+
+# ─── ruff ─────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific
+]
+ignore = [
+    "E501",   # line-length はformatterが管理
+    "SIM105", # contextlib.suppress は try/except より読みにくい場合がある
+    "SIM108", # ternary operator強制しない
+    "SIM115", # context manager for NamedTemporaryFile (テストで必要)
+    "SIM117", # nested with statements (テストの可読性のため許容)
+    "B905",   # strict=True in zip
+    "UP007",  # X | Y union syntax (Python 3.10+)
+    "RUF001", # 全角括弧 in string (日本語テキストで意図的)
+    "RUF002", # 全角括弧 in docstring (日本語テキストで意図的)
+    "RUF003", # 全角括弧 in comment (日本語テキストで意図的)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lib"]
+
+# ─── ty ───────────────────────────────────────────────────
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.rules]
+# lastrowid は INSERT 後は必ず int だが型的には int | None
+invalid-return-type = "warn"
+# test ファイルでの assertRaises パターン等
+call-non-callable = "warn"
+not-subscriptable = "warn"
+
+# ─── pytest ───────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

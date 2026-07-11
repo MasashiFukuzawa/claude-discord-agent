@@ -1,0 +1,14 @@
+{
+  "name": "claude-discord-agent",
+  "description": "Claude Code-only Discord agent controller",
+  "owner": {
+    "name": "claude-discord-agent contributors"
+  },
+  "plugins": [
+    {
+      "name": "discord-agent",
+      "source": "./",
+      "description": "Dispatch and supervise Claude Code workers from a Discord controller session"
+    }
+  ]
+}

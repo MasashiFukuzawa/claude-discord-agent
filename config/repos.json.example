@@ -1,0 +1,9 @@
+{
+  "my-app": {
+    "path": "/path/to/my-app",
+    "aliases": [],
+    "model": "sonnet",
+    "max_concurrency": 1,
+    "expected_git_root": "/path/to/my-app"
+  }
+}

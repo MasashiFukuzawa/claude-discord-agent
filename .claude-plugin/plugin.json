@@ -1,0 +1,8 @@
+{
+  "name": "discord-agent",
+  "version": "1.0.0",
+  "description": "Discord-driven asynchronous multi-repository controller for Claude Code",
+  "author": {
+    "name": "claude-discord-agent contributors"
+  }
+}
