@@ -1,24 +1,24 @@
-version: 1
 repo: claude-discord-agent
-verify:
-  quick:
-    - uv run ruff check .
-    - uv run pytest
-    - uv build
-    - ./scripts/wheel-smoke.sh
-  standard:
-    - uv run ruff check .
-    - uv run ty check lib orchestrator.py
-    - uv run pytest
-    - uv build
-    - ./scripts/wheel-smoke.sh
-    - uv run ./scripts/validate-plugin.py
-    - ./scripts/check-public-content.sh
-  full:
-    - uv run ruff check .
-    - uv run ty check lib orchestrator.py
-    - uv run pytest
-    - uv build
-    - ./scripts/wheel-smoke.sh
-    - uv run ./scripts/validate-plugin.py
-    - ./scripts/check-public-content.sh
+
+# CI (.github/workflows/ci.yml) already runs ruff check, ty check, pytest, uv build,
+# wheel-smoke.sh, validate-plugin.py, and check-public-content.sh on every push, and no
+# git hook exists locally. There is nothing left for done to enforce that CI doesn't
+# already guarantee, so verify stays empty.
+verify: []
+
+tier_floors:
+  # No path pattern isolates security-sensitive code: token handling and permission
+  # enforcement live in ordinary files under lib/ (paths.py, notifier.py), not a
+  # dedicated directory, and most changes to those files are unrelated to the boundary.
+  # Scoped to changes that actually move the boundary, not merely touch nearby code —
+  # a broader condition (e.g. "handling of worker output") would match nearly every
+  # functional change in this repo and pin it to full unconditionally.
+  full_conditions:
+    - "Changes that alter which component (Controller, Supervisor, or Worker) can read the Discord bot token, or that relax or remove the 0700/0600 permission enforcement for credential or state files described in SECURITY.md"
+
+review_criteria:
+  - "Discord token stays out of Worker reach; Controller/Supervisor/Worker boundaries from SECURITY.md are preserved"
+  - "credential and state file permission checks (0700/0600) and rejection of unsafe files"
+  - "untrusted input handling: worker output, tmux pane state, opt-in result-preview redaction"
+
+external_review: none
