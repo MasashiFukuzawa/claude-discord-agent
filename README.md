@@ -27,6 +27,9 @@ uv tool install git+https://github.com/MasashiFukuzawa/claude-discord-agent.git
 orchestrator --help
 ```
 
+When installing from a local checkout, note that `uv tool install --force .` reuses the cached
+wheel while the version number is unchanged — add `--reinstall` to pick up local changes.
+
 Clone-based installs remain supported for operators who want a stable runtime checkout:
 
 ```bash
@@ -72,6 +75,11 @@ orchestrator status
 orchestrator collect example-app --json
 ```
 
+`daemon start` detaches and logs to `daemon.log` in the state directory, including crash
+tracebacks. To run the daemon under a process supervisor (launchd, systemd), use
+`daemon start --foreground` so keep-alive supervision works; the self-forking mode is for
+manual, unsupervised use.
+
 Mutable state lives under `${XDG_STATE_HOME:-$HOME/.local/state}/claude-discord-agent/`.
 The SQLite registry is authoritative. Export/import data is written to
 `${XDG_CONFIG_HOME:-$HOME/.config}/claude-discord-agent/repos.json`. Existing clone-based
@@ -102,10 +110,13 @@ uv run ty check lib orchestrator.py
 uv run pytest
 uv build
 ./scripts/wheel-smoke.sh
+uv run ./scripts/validate-plugin.py
 ./scripts/check-public-content.sh
 ```
 
-See [SECURITY.md](SECURITY.md) for the threat model and reporting instructions.
+See [docs/architecture.md](docs/architecture.md) for the full architecture and operational
+contracts (an HTML overview is at [docs/architecture.html](docs/architecture.html)), and
+[SECURITY.md](SECURITY.md) for the threat model and reporting instructions.
 
 ## License
 

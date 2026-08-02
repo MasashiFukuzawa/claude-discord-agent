@@ -6,13 +6,18 @@ credentials, personal paths, organization names, private repository names, or pr
 Before opening a pull request, run:
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras --locked
 uv run ruff check .
 uv run ty check lib orchestrator.py
 uv run pytest
+uv build
+./scripts/wheel-smoke.sh
 uv run ./scripts/validate-plugin.py
 ./scripts/check-public-content.sh
 ```
+
+This matches the CI gate exactly. See [docs/architecture.md](docs/architecture.md) for the
+component contracts a change must preserve.
 
 Security-sensitive changes should include tests for failure behavior. Do not commit `config/repos.json`,
 state databases, `.env` files, Discord channel IDs, or bot tokens.

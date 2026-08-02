@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-discord-agent — Architecture</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1f27; --muted: #5b6472; --line: #d8dde5;
+    --panel: #f4f6f9; --accent: #4756c4; --ok: #1d7a4f; --warn: #a05a00; --bad: #b3323b;
+    --code-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --fg: #e6e9ee; --muted: #9aa3b0; --line: #313845;
+      --panel: #1c2129; --accent: #8b96e8; --ok: #57b884; --warn: #d29a4a; --bad: #de7078;
+      --code-bg: #232a34;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.7rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; }
+  p.lead { color: var(--muted); margin-top: 0; }
+  code, pre {
+    font: 0.86em/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg); border-radius: 4px;
+  }
+  code { padding: .1em .35em; }
+  pre { padding: .8rem 1rem; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+  th, td { border: 1px solid var(--line); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel); }
+  .diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+             padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+  .diagram pre { background: none; padding: 0; margin: 0; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .callout { border-left: 4px solid var(--warn); background: var(--panel);
+             padding: .7rem 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; }
+  .callout strong:first-child { color: var(--warn); }
+  li { margin: .25rem 0; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<h1>claude-discord-agent</h1>
+<p class="lead">A local, asynchronous job controller that connects Discord to Claude Code.
+You send a request from Discord; a Controller session dispatches it; Workers run
+<code>claude&nbsp;-p</code>; a non-LLM Supervisor guarantees you hear back.
+This page is the human-oriented overview — the precise contracts live in
+<a href="architecture.md">docs/architecture.md</a>.</p>
+
+<h2>The big picture</h2>
+<div class="diagram"><pre>
+ Discord DM/channel
+      │  message
+      ▼
+┌───────────────────┐  dispatch   ┌────────────────────────────────┐
+│    Controller      │───────────▶│      Orchestrator daemon        │
+│ (Claude Code       │            │  Runner · Watchdog · Scheduler  │
+│  session + channel │            │  · Supervisor    [SQLite queue] │
+│  plugin, in tmux)  │◀───────────│                                 │
+└───────────────────┘  wake (opt) └───────────────┬────────────────┘
+      │  ▲                                        │ spawns per job
+      │  │ collect → reply → report-done          ▼
+      │  │                              ┌──────────────────┐
+      │  └──────────────────────────────│      Worker       │
+      │        results via queue        │  claude -p in the │
+      ▼                                 │  registered repo  │
+ Discord reply                          └──────────────────┘
+      ▲                                     (no Discord token,
+      │ fallback notification                no bypass flags)
+      └────────── Supervisor (direct Discord API call)
+</pre></div>
+
+<h2>Roles and trust boundaries</h2>
+<table>
+  <tr><th>Role</th><th>What it does</th><th>Discord token</th></tr>
+  <tr><td><strong>Controller</strong></td>
+      <td>Interactive Claude Code session with the Discord channel plugin. Accepts requests,
+          dispatches jobs, replies with collected results. Never edits code itself.</td>
+      <td>Via its channel plugin</td></tr>
+  <tr><td><strong>Orchestrator daemon</strong></td>
+      <td>Single supervised process running the job queue, retry/backoff, Worker monitoring, and
+          final delivery.</td>
+      <td>Yes (Supervisor fallback)</td></tr>
+  <tr><td><strong>Worker</strong></td>
+      <td>One <code>claude -p</code> run per job inside the registered repository. Prints a
+          structured result block.</td>
+      <td class="ok"><strong>Never</strong></td></tr>
+</table>
+
+<h2>A job's life</h2>
+<div class="diagram"><pre>
+queued ─▶ starting ─▶ running ─▶ <span class="ok">succeeded</span> ──────────────┐
+                        │                                    │ terminal:
+                        ├─▶ failed_retryable ─▶ (requeued)   │ Supervisor
+                        ├─▶ rate_limited ────▶ (backoff)     │ delivers
+                        ├─▶ <span class="bad">failed_permanent</span> ─────────────┤
+                        ├─▶ <span class="warn">needs_controller</span> ─────────────┘
+                        └─▶ timed_out / lost ─▶ (Watchdog resolves)
+</pre></div>
+
+<h2>How you always hear back</h2>
+<p>When a job reaches a terminal state, the Supervisor makes sure exactly one notification
+happens even if the Controller session is dead:</p>
+<ol>
+  <li><strong>Wake (experimental, opt-in)</strong> — if a Controller tmux pane is registered and
+      provably idle, type a one-line instruction into it: collect the result, reply on Discord,
+      then <code>report-done</code>. Unknown pane state = do nothing (fail-closed).</li>
+  <li><strong>Fallback (default)</strong> — claim the job atomically and post a notification
+      directly to the Discord API. By default it contains no Worker output;
+      <code>--fallback-result-preview</code> opts into a 200-character redacted preview.</li>
+</ol>
+<p><code>report-done</code> after a successful reply suppresses duplicate delivery; transient
+API failures retry, permanent ones mark the job undeliverable.</p>
+
+<h2>Running it</h2>
+<table>
+  <tr><th>Piece</th><th>Reference shape</th></tr>
+  <tr><td>Runtime</td><td><code>uv tool install git+&lt;repo-url&gt;</code> → <code>orchestrator</code>.
+      For source installs, pass <code>--reinstall</code> to pick up local changes when the
+      version number is unchanged.</td></tr>
+  <tr><td>Daemon</td><td><code>orchestrator daemon start --foreground</code> under a process
+      supervisor with keep-alive (launchd, systemd). The self-forking mode is for manual,
+      unsupervised use.</td></tr>
+  <tr><td>Controller</td><td>A Claude Code session with the Discord channel plugin, inside tmux,
+      wrapped in a restart loop and watched by a periodic health check.</td></tr>
+  <tr><td>Secrets</td><td><code>DISCORD_BOT_TOKEN</code> via environment or an owner-only
+      (<code>0600</code>) credential file; state dirs are <code>0700</code>. Hardened reads
+      reject symlinks, foreign owners, and group/world-readable files.</td></tr>
+</table>
+
+<div class="callout">
+  <strong>One gateway connection per bot token.</strong> The Discord channel plugin connects to
+  the Discord gateway once per MCP-server instance, unconditionally. If any other process holds a
+  connection on the same token (another agent session, an IDE-embedded MCP client, an orphaned
+  server), the newer login fails at startup and the host marks the plugin failed — the Controller
+  then <em>looks</em> healthy but receives nothing. Health checks must verify the session's
+  Discord MCP child process exists (with a startup grace period), and treat competing connections
+  as faults to remove, not background noise.
+</div>
+
+<h2>Where things live</h2>
+<table>
+  <tr><th>Path</th><th>Contents</th><th>Mode</th></tr>
+  <tr><td><code>$XDG_STATE_HOME/claude-discord-agent/</code></td>
+      <td><code>state.db</code> (authoritative), <code>daemon.pid</code>,
+          <code>daemon.log</code>, <code>controller.pane</code></td>
+      <td><code>0700</code> / <code>0600</code></td></tr>
+  <tr><td><code>$XDG_CONFIG_HOME/claude-discord-agent/</code></td>
+      <td><code>env</code> (credentials), <code>repos.json</code> (export)</td>
+      <td><code>0700</code> / <code>0600</code></td></tr>
+</table>
+<p>The daemon detaches by replacing file descriptors 0/1/2 (<code>dup2</code>), so starting it
+never blocks a calling pipeline, and everything it logs — including crash tracebacks — lands in
+<code>daemon.log</code>.</p>
+
+<h2>Verification gate</h2>
+<pre><code>uv run ruff check .
+uv run ty check lib orchestrator.py
+uv run pytest
+uv build
+./scripts/wheel-smoke.sh
+uv run ./scripts/validate-plugin.py
+./scripts/check-public-content.sh</code></pre>
+<p>CI runs the same seven commands on every push. The last one rejects personal paths and email
+addresses — operator-specific values (channel IDs, hostnames, absolute paths) belong in a private
+runbook outside this repository, never in tracked files.</p>
+
+</main>
+</body>
+</html>
