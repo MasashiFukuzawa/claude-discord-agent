@@ -24,6 +24,8 @@ from .watchdog import Watchdog
 
 logger = logging.getLogger("daemon")
 
+_DAEMON_LOG_HANDLER = "discord-agent-daemon"
+
 
 def _state_dir_for_db(db: Database) -> Path:
     """DBパスからPID/logのディレクトリを決定する。
@@ -39,6 +41,26 @@ def _pid_file_for(state_dir: Path) -> Path:
 
 def _log_file_for(state_dir: Path) -> Path:
     return state_dir / "daemon.log"
+
+
+def _configure_file_logging(log_path: Path) -> None:
+    """Attach a root handler so the detached daemon leaves a diagnostic trail.
+
+    Without this the module loggers emit nothing below WARNING and
+    logger.exception() in the crash path writes to no destination, which
+    leaves an unattended run with no record of why it stopped. Called after
+    fd 1/2 already point at log_path, so the handler reuses that stream.
+    """
+    root = logging.getLogger()
+    if any(h.name == _DAEMON_LOG_HANDLER for h in root.handlers):
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.name = _DAEMON_LOG_HANDLER
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
 
 def is_daemon_running(state_dir: Path | None = None) -> int | None:
@@ -133,11 +155,36 @@ class Daemon:
 
         # 子プロセス
         os.setsid()
-        log_path = _log_file_for(self._state_dir)
-        sys.stdin = open(os.devnull)
-        sys.stdout = open(log_path, "a")
-        sys.stderr = sys.stdout
+        self._detach_stdio()
+        _configure_file_logging(_log_file_for(self._state_dir))
         return self._run()
+
+    def _detach_stdio(self) -> None:
+        """Redirect fd 0/1/2 so the daemon holds no inherited pipe.
+
+        Rebinding sys.stdout alone leaves the real descriptors attached to
+        whatever invoked us, so a caller that reads our output (a wrapper
+        script, a shell pipeline, CI) blocks until the daemon exits. Children
+        such as Workers inherit the same descriptors. dup2 replaces them.
+        """
+        log_path = _log_file_for(self._state_dir)
+        ensure_private_dir(self._state_dir, tighten_existing=self.db._secure_parent)
+        log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        secure_file(log_path)
+        null_fd = os.open(os.devnull, os.O_RDONLY)
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(null_fd, 0)
+            os.dup2(log_fd, 1)
+            os.dup2(log_fd, 2)
+        finally:
+            for fd in (null_fd, log_fd):
+                if fd > 2:
+                    os.close(fd)
+        sys.stdin = open(0, closefd=False)
+        sys.stdout = open(1, "a", closefd=False)
+        sys.stderr = open(2, "a", closefd=False)
 
     def _run(self) -> int:
         """メインループ。"""
