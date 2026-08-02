@@ -61,6 +61,43 @@ def test_daemon_start_releases_the_callers_pipe(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="daemon detach is POSIX-only")
+def test_foreground_daemon_logs_to_stderr(tmp_path: Path) -> None:
+    """Foreground mode is what a process supervisor runs, so it needs a trail.
+
+    Nothing redirects fd 2 here, so the supervisor's captured stderr is the
+    only place a crash can be explained.
+    """
+    state_dir = tmp_path / "state"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(REPO_ROOT / "orchestrator.py"),
+            "daemon",
+            "start",
+            "--foreground",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "XDG_STATE_HOME": str(state_dir)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.time() + 15
+        while time.time() < deadline and not is_daemon_running(
+            state_dir / "claude-discord-agent"
+        ):
+            time.sleep(0.2)
+        assert is_daemon_running(state_dir / "claude-discord-agent")
+    finally:
+        proc.terminate()
+        _, stderr = proc.communicate(timeout=30)
+
+    assert "Daemon started" in stderr
+    assert "Daemon stopped" in stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="daemon detach is POSIX-only")
 def test_daemon_log_is_owner_only_and_records_startup(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     agent_state = state_dir / "claude-discord-agent"

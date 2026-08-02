@@ -43,13 +43,14 @@ def _log_file_for(state_dir: Path) -> Path:
     return state_dir / "daemon.log"
 
 
-def _configure_file_logging(log_path: Path) -> None:
-    """Attach a root handler so the detached daemon leaves a diagnostic trail.
+def _configure_logging() -> None:
+    """Attach a root handler so the daemon leaves a diagnostic trail.
 
     Without this the module loggers emit nothing below WARNING and
     logger.exception() in the crash path writes to no destination, which
-    leaves an unattended run with no record of why it stopped. Called after
-    fd 1/2 already point at log_path, so the handler reuses that stream.
+    leaves an unattended run with no record of why it stopped. The handler
+    targets stderr for both modes: detached, that is already the log file;
+    in foreground it is whatever supervises the process.
     """
     root = logging.getLogger()
     if any(h.name == _DAEMON_LOG_HANDLER for h in root.handlers):
@@ -145,6 +146,7 @@ class Daemon:
             return 1
 
         if foreground:
+            _configure_logging()
             return self._run()
 
         # バックグラウンドfork
@@ -156,7 +158,7 @@ class Daemon:
         # 子プロセス
         os.setsid()
         self._detach_stdio()
-        _configure_file_logging(_log_file_for(self._state_dir))
+        _configure_logging()
         return self._run()
 
     def _detach_stdio(self) -> None:
