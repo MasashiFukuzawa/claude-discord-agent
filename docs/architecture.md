@@ -124,8 +124,8 @@ overrides the credential file location; environment variables take precedence ov
 
 ## Verification
 
-`.agents/done.yml` intentionally keeps `verify` empty because CI runs the full gate on every
-push. The gate (also in `CONTRIBUTING.md` / `README.md`):
+CI runs the full gate on every push, and the Delegated scope in `AGENTS.md` names it as the
+checks to pass before completion. The gate (also in `CONTRIBUTING.md` / `README.md`):
 
 ```
 uv run ruff check .
